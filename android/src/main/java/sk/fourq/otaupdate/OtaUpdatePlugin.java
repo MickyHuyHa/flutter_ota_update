@@ -120,6 +120,16 @@ public class OtaUpdatePlugin implements FlutterPlugin, ActivityAware, EventChann
         Log.d(TAG, "onMethodCall "+call.method);
         if (call.method.equals("getAbi")) {
             result.success(Build.SUPPORTED_ABIS[0]);
+        } else if (call.method.equals("reinstallApk")) {
+            if (call.arguments == null) {
+                Log.e(TAG, "Cant find arguments in reinstallApk method.");
+                return;
+            }
+            Map<String, Object> map = (Map<String, Object>) call.arguments;
+            String fileDestination = (String) map.get("fileDestination");
+            if (fileDestination != null) {
+                executeDownload(fileDestination);
+            }
         } else {
             result.notImplemented();
         }
@@ -166,7 +176,7 @@ public class OtaUpdatePlugin implements FlutterPlugin, ActivityAware, EventChann
         boolean skipWriteExternalStorage = android.os.Build.VERSION.SDK_INT >= SKIP_WRITE_EXTERNAL_STORAGE_SDK_INT;
 
         if (skipWriteExternalStorage || PackageManager.PERMISSION_GRANTED == ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
-            executeDownload();
+            executeDownload(null);
         } else {
             String[] permissions = {
                     Manifest.permission.WRITE_EXTERNAL_STORAGE
@@ -191,7 +201,7 @@ public class OtaUpdatePlugin implements FlutterPlugin, ActivityAware, EventChann
                     return false;
                 }
             }
-            executeDownload();
+            executeDownload(null);
             return true;
         } else {
             reportError(OtaStatus.PERMISSION_NOT_GRANTED_ERROR, "Permission not granted", null);
@@ -203,7 +213,7 @@ public class OtaUpdatePlugin implements FlutterPlugin, ActivityAware, EventChann
      * Execute download and start installation. This method is called either from onListen method
      * or from onRequestPermissionsResult if user had to grant permissions.
      */
-    private void executeDownload() {
+    private void executeDownload(String fileDestination) {
         try {
             String dataDir = context.getApplicationInfo().dataDir + "/files/ota_update";
             //PREPARE URLS
@@ -213,6 +223,11 @@ public class OtaUpdatePlugin implements FlutterPlugin, ActivityAware, EventChann
             //DELETE APK FILE IF IT ALREADY EXISTS
             final File file = new File(destination);
             if (file.exists()) {
+                if (fileDestination != null && fileDestination.equals(destination)) {
+                    Log.d(TAG, "reinstall exist file");
+                    onDownloadComplete(destination, fileUri);
+                    return;
+                }
                 if (!file.delete()) {
                     Log.e(TAG, "WARNING: unable to delete old apk file before starting OTA");
                 }
@@ -327,13 +342,13 @@ public class OtaUpdatePlugin implements FlutterPlugin, ActivityAware, EventChann
             intent.setDataAndType(fileUri, "application/vnd.android.package-archive");
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         }
+        context.startActivity(intent);
         //SEND INSTALLING EVENT
         if (progressSink != null) {
             //NOTE: We have to start intent before sending event to stream
             //if application tries to programatically terminate app it may produce race condition
             //and application may end before intent is dispatched
-            context.startActivity(intent);
-            progressSink.success(Arrays.asList("" + OtaStatus.INSTALLING.ordinal(), ""));
+            progressSink.success(Arrays.asList("" + OtaStatus.INSTALLING.ordinal(), "", downloadedFile.getPath()));
             progressSink.endOfStream();
             progressSink = null;
         }
